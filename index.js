@@ -8,14 +8,18 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
-  res.json({ message: "YouTube Trend Engine Running 🚀" });
+  res.json({ message: "Viral Detection Engine Running 🚀" });
 });
 
 app.get("/explore", async (req, res) => {
   try {
-    const query = req.query.q || "mrbeast";
+    const query = req.query.q || "gaming";
 
-    // STEP 1: Search videos
+    const sevenDaysAgo = new Date(
+      Date.now() - 7 * 24 * 60 * 60 * 1000
+    ).toISOString();
+
+    // 🔎 STEP 1: Fetch recent US short-form uploads
     const searchResponse = await axios.get(
       "https://www.googleapis.com/youtube/v3/search",
       {
@@ -24,8 +28,9 @@ app.get("/explore", async (req, res) => {
           q: query,
           part: "snippet",
           type: "video",
-          maxResults: 25,
-          order: "viewCount",
+          maxResults: 30,
+          order: "date",
+          publishedAfter: sevenDaysAgo,
           relevanceLanguage: "en",
           regionCode: "US",
           videoDuration: "short"
@@ -41,7 +46,7 @@ app.get("/explore", async (req, res) => {
       return res.json([]);
     }
 
-    // STEP 2: Get statistics
+    // 📊 STEP 2: Get statistics
     const statsResponse = await axios.get(
       "https://www.googleapis.com/youtube/v3/videos",
       {
@@ -53,47 +58,55 @@ app.get("/explore", async (req, res) => {
       }
     );
 
+    const now = new Date();
+
     const processedVideos = statsResponse.data.items
       .map((video) => {
         const views = parseInt(video.statistics.viewCount || 0);
         const likes = parseInt(video.statistics.likeCount || 0);
         const comments = parseInt(video.statistics.commentCount || 0);
+
         const publishedAt = new Date(video.snippet.publishedAt);
+        const hoursSinceUpload =
+          (now - publishedAt) / (1000 * 60 * 60);
 
-        const now = new Date();
-        const daysSinceUpload =
-          (now - publishedAt) / (1000 * 60 * 60 * 24);
+        if (hoursSinceUpload <= 0.5) return null;
 
-        // 🔒 QUALITY FILTERS
-        const minViews = 1000;
-        const minEngagement = 0.01;
+        // 📈 Velocity
+        const viewsPerHour = views / hoursSinceUpload;
 
-        if (views < minViews) return null;
-
+        // 💬 Engagement
         const engagementRate =
           views > 0 ? (likes + comments) / views : 0;
 
-        if (engagementRate < minEngagement) return null;
+        // 🚨 Quality filters
+        if (views < 500) return null;
+        if (engagementRate < 0.02) return null;
 
-        // 🧠 Prevent crazy early inflation
-        const adjustedDays = Math.max(daysSinceUpload, 0.5);
-        const viewsPerDay = views / adjustedDays;
-
-        // 🚀 Recency boost
+        // 🔥 Recency boost
         let recencyBoost = 1;
-        if (daysSinceUpload <= 1) recencyBoost = 2;
-        else if (daysSinceUpload <= 3) recencyBoost = 1.7;
-        else if (daysSinceUpload <= 7) recencyBoost = 1.4;
-        else if (daysSinceUpload <= 30) recencyBoost = 1.1;
+        if (hoursSinceUpload <= 6) recencyBoost = 2.2;
+        else if (hoursSinceUpload <= 24) recencyBoost = 1.8;
+        else if (hoursSinceUpload <= 72) recencyBoost = 1.4;
+        else recencyBoost = 1.1;
 
-        // ⭐ Big channel boost
-        const channelBoost = views > 1000000 ? 1.3 : 1;
+        // 💎 Engagement multiplier
+        const engagementBoost = 1 + engagementRate * 6;
 
+        // ⚡ Final trend score
         const trendScore =
-          viewsPerDay *
-          (1 + engagementRate * 4) *
+          viewsPerHour *
           recencyBoost *
-          channelBoost;
+          engagementBoost;
+
+        // 🚀 Viral spike detection
+        let viralLevel = "Normal";
+        if (viewsPerHour > 20000 && engagementRate > 0.05)
+          viralLevel = "Breakout";
+        else if (viewsPerHour > 10000)
+          viralLevel = "Hot";
+        else if (viewsPerHour > 5000)
+          viralLevel = "Rising";
 
         return {
           videoId: video.id,
@@ -103,9 +116,11 @@ app.get("/explore", async (req, res) => {
           views,
           likes,
           comments,
-          viewsPerDay: Math.round(viewsPerDay),
+          hoursSinceUpload: Math.round(hoursSinceUpload),
+          viewsPerHour: Math.round(viewsPerHour),
           engagementRate: Number(engagementRate.toFixed(3)),
-          trendScore: Math.round(trendScore)
+          trendScore: Math.round(trendScore),
+          viralLevel
         };
       })
       .filter(Boolean)
@@ -115,7 +130,7 @@ app.get("/explore", async (req, res) => {
   } catch (error) {
     console.error(error.response?.data || error.message);
     res.status(500).json({
-      error: "Something went wrong",
+      error: "Engine failure",
       details: error.response?.data || error.message
     });
   }
