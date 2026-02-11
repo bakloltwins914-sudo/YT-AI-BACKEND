@@ -1,5 +1,4 @@
 import express from "express";
-import fetch from "node-fetch";
 import cors from "cors";
 
 const app = express();
@@ -7,238 +6,88 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const YT_API_KEY = process.env.YT_API_KEY;
 
-// ==========================
-// CACHE SYSTEM
-// ==========================
-let cache = {};
-const CACHE_TIME = 10 * 60 * 1000; // 10 min
+// Sample: Replace this with your live fetch from DB or YouTube API
+let videos = [
+  // Example entry
+  {
+    videoId: "IQxea9UB1nQ",
+    title: "$100,000,000 Car Doors",
+    channel: "MrBeast",
+    publishedAt: "2023-09-19T17:00:00Z",
+    views: 1285069443,
+    likes: 29804024,
+    comments: 41419,
+  },
+  // Add all your video objects here
+];
 
-function setCache(key, data) {
-  cache[key] = {
-    timestamp: Date.now(),
-    data
-  };
-}
-
-function getCache(key) {
-  const entry = cache[key];
-  if (!entry) return null;
-
-  if (Date.now() - entry.timestamp > CACHE_TIME) {
-    delete cache[key];
-    return null;
-  }
-
-  return entry.data;
-}
-
-// ==========================
-// ADVANCED VIRAL ENGINE
-// ==========================
-function calculateAdvancedScore(video) {
-  const {
-    views,
-    likes,
-    comments,
-    subscribers,
-    hoursSinceUpload
-  } = video;
-
-  const viewsPerHour =
-    hoursSinceUpload > 0 ? views / hoursSinceUpload : views;
-
-  const engagementRate =
-    views > 0 ? (likes + comments) / views : 0;
-
-  const subRatio =
-    subscribers > 0 ? views / subscribers : 0;
-
-  const velocityBoost =
-    hoursSinceUpload < 24 ? 1.5 :
-    hoursSinceUpload < 72 ? 1.2 : 1;
-
-  const ageDecay =
-    hoursSinceUpload > 168 ? 0.7 : 1;
-
-  const score =
-    (viewsPerHour * 0.5 +
-      engagementRate * 60000 +
-      subRatio * 2000) *
-    velocityBoost *
-    ageDecay;
-
-  let viralLevel = "Normal";
-
-  if (score > 300000) viralLevel = "Exploding";
-  else if (score > 150000) viralLevel = "Hot";
-  else if (score > 70000) viralLevel = "Trending";
-
+// UTILITY FUNCTIONS
+const calculateMetrics = (video) => {
+  const published = new Date(video.publishedAt);
+  const now = new Date();
+  const hoursSinceUpload = Math.max((now - published) / 36e5, 1); // prevent div by 0
+  const viewsPerHour = video.views / hoursSinceUpload;
+  const viewsPerDay = viewsPerHour * 24;
+  const engagementRate = ((video.likes + video.comments) / video.views).toFixed(4);
+  const viralScore = (viewsPerDay * engagementRate * 10).toFixed(0); // arbitrary boost
   return {
-    viewsPerHour: Math.round(viewsPerHour),
-    engagementRate: Number(engagementRate.toFixed(3)),
-    subRatio: Number(subRatio.toFixed(2)),
-    trendScore: Math.round(score),
-    viralLevel
+    ...video,
+    hoursSinceUpload,
+    viewsPerHour,
+    viewsPerDay,
+    engagementRate: parseFloat(engagementRate),
+    viralScore: parseInt(viralScore),
   };
-}
+};
 
-// ==========================
-// MAIN DATA ROUTE
-// ==========================
-app.get("/data", async (req, res) => {
-  try {
-    if (!YT_API_KEY) {
-      return res.status(500).json({ error: "Missing API Key" });
-    }
+// ENHANCE ALL VIDEOS
+const enhancedData = () => videos.map(calculateMetrics);
 
-    const {
-      q = "MrBeast",
-      region = "US",
-      max = 25,
-      minSubs = 10000,
-      minViews = 10000,
-      page = 1
-    } = req.query;
+// SORTING HELPERS
+const sortByMetric = (data, metric = "viralScore", order = "desc") =>
+  data.sort((a, b) => (order === "desc" ? b[metric] - a[metric] : a[metric] - b[metric]));
 
-    const cacheKey = `${q}-${region}-${max}-${minSubs}-${minViews}-${page}`;
-    const cached = getCache(cacheKey);
-    if (cached) return res.json(cached);
-
-    // ======================
-    // SEARCH VIDEOS
-    // ======================
-    const searchRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${q}&type=video&order=date&maxResults=${max}&regionCode=${region}&key=${YT_API_KEY}`
-    );
-
-    const searchData = await searchRes.json();
-    const videoIds = searchData.items.map(i => i.id.videoId);
-
-    if (!videoIds.length) {
-      return res.json([]);
-    }
-
-    // ======================
-    // VIDEO DETAILS
-    // ======================
-    const videoRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(",")}&key=${YT_API_KEY}`
-    );
-
-    const videoData = await videoRes.json();
-
-    const channelIds = videoData.items.map(
-      v => v.snippet.channelId
-    );
-
-    // ======================
-    // CHANNEL DETAILS
-    // ======================
-    const channelRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelIds.join(",")}&key=${YT_API_KEY}`
-    );
-
-    const channelData = await channelRes.json();
-
-    const channelMap = {};
-    channelData.items.forEach(ch => {
-      channelMap[ch.id] = Number(
-        ch.statistics.subscriberCount || 0
-      );
-    });
-
-    // ======================
-    // BUILD FINAL DATA
-    // ======================
-    const results = videoData.items.map(video => {
-      const stats = video.statistics;
-      const snippet = video.snippet;
-
-      const views = Number(stats.viewCount || 0);
-      const likes = Number(stats.likeCount || 0);
-      const comments = Number(stats.commentCount || 0);
-      const subs = channelMap[snippet.channelId] || 0;
-
-      const uploadTime = new Date(snippet.publishedAt);
-      const now = new Date();
-      const hoursSinceUpload =
-        (now - uploadTime) / (1000 * 60 * 60);
-
-      const base = {
-        videoId: video.id,
-        title: snippet.title,
-        channel: snippet.channelTitle,
-        thumbnail: snippet.thumbnails.high.url,
-        publishedAt: snippet.publishedAt,
-        views,
-        likes,
-        comments,
-        subscribers: subs,
-        hoursSinceUpload: Math.round(hoursSinceUpload),
-        duration: video.contentDetails.duration
-      };
-
-      return {
-        ...base,
-        ...calculateAdvancedScore(base)
-      };
-    });
-
-    // ======================
-    // FILTER
-    // ======================
-    const filtered = results
-      .filter(v => v.subscribers >= minSubs)
-      .filter(v => v.views >= minViews);
-
-    // ======================
-    // SORT
-    // ======================
-    filtered.sort((a, b) => b.trendScore - a.trendScore);
-
-    // ======================
-    // PAGINATION
-    // ======================
-    const pageSize = 10;
-    const start = (page - 1) * pageSize;
-    const paginated = filtered.slice(
-      start,
-      start + pageSize
-    );
-
-    setCache(cacheKey, paginated);
-
-    res.json(paginated);
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// ==========================
-// ANALYTICS ROUTE
-// ==========================
-app.get("/stats", (req, res) => {
-  res.json({
-    cachedQueries: Object.keys(cache).length,
-    serverTime: new Date(),
-    uptimeSeconds: process.uptime()
-  });
-});
-
-// ==========================
-// HEALTH CHECK
-// ==========================
+// API ENDPOINTS
 app.get("/", (req, res) => {
-  res.json({
-    status: "Trend Intelligence API Running 🚀",
-    version: "2.0 Beast Mode"
-  });
+  res.send("🔥 Beast backend running!");
 });
 
-app.listen(PORT, () =>
-  console.log(`Server running on port ${PORT}`)
-);
+// Get all videos with metrics
+app.get("/videos", (req, res) => {
+  const data = enhancedData();
+  res.json(data);
+});
+
+// Sort videos dynamically by query params
+// Example: /videos/sort?metric=viewsPerDay&order=desc
+app.get("/videos/sort", (req, res) => {
+  const { metric = "viralScore", order = "desc" } = req.query;
+  const data = sortByMetric(enhancedData(), metric, order);
+  res.json(data);
+});
+
+// Filter videos by min views or engagement rate
+// Example: /videos/filter?minViews=1000000&minEngagement=0.02
+app.get("/videos/filter", (req, res) => {
+  const { minViews = 0, minEngagement = 0 } = req.query;
+  const data = enhancedData().filter(
+    (v) => v.views >= minViews && v.engagementRate >= minEngagement
+  );
+  res.json(data);
+});
+
+// Add new video dynamically
+app.post("/videos", (req, res) => {
+  const newVideo = req.body;
+  if (!newVideo.videoId || !newVideo.views) {
+    return res.status(400).json({ error: "videoId and views are required" });
+  }
+  videos.push(newVideo);
+  res.json({ success: true, video: calculateMetrics(newVideo) });
+});
+
+// Server start
+app.listen(PORT, () => {
+  console.log(`🔥 Beast backend live on port ${PORT}`);
+});
