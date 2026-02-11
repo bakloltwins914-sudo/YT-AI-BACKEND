@@ -8,16 +8,18 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const YT_API_KEY = process.env.YT_API_KEY;
 
+// Warn if API key is missing
 if (!YT_API_KEY) {
-  console.error("Error: YT_API_KEY not set!");
-  process.exit(1);
+  console.warn(
+    "⚠️ Warning: YT_API_KEY not set! /data and /explore endpoints won't work."
+  );
 }
 
 // ==========================
 // CACHE SYSTEM
 // ==========================
 let cache = {};
-const CACHE_TIME = 10 * 60 * 1000; // 10 minutes
+const CACHE_TIME = 10 * 60 * 1000; // 10 min
 
 function setCache(key, data) {
   cache[key] = {
@@ -72,124 +74,141 @@ function calculateAdvancedScore(video) {
 }
 
 // ==========================
-// MAIN DATA ROUTE
+// MAIN DATA FUNCTION
 // ==========================
+async function fetchYouTubeData({
+  q = "MrBeast",
+  region = "US",
+  max = 25,
+  minSubs = 10000,
+  minViews = 10000,
+  page = 1,
+}) {
+  if (!YT_API_KEY) return [];
+
+  const cacheKey = `${q}-${region}-${max}-${minSubs}-${minViews}-${page}`;
+  const cached = getCache(cacheKey);
+  if (cached) return cached;
+
+  // SEARCH VIDEOS
+  const searchRes = await fetch(
+    `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
+      q
+    )}&type=video&order=date&maxResults=${max}&regionCode=${region}&key=${YT_API_KEY}`
+  );
+  const searchData = await searchRes.json();
+  if (!searchData.items || searchData.items.length === 0) return [];
+
+  const videoIds = searchData.items.map((i) => i.id.videoId).filter(Boolean);
+
+  // VIDEO DETAILS
+  const videoRes = await fetch(
+    `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(
+      ","
+    )}&key=${YT_API_KEY}`
+  );
+  const videoData = await videoRes.json();
+
+  // CHANNEL DETAILS
+  const channelIds = [...new Set(videoData.items.map((v) => v.snippet.channelId))];
+  const channelRes = await fetch(
+    `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelIds.join(
+      ","
+    )}&key=${YT_API_KEY}`
+  );
+  const channelData = await channelRes.json();
+
+  const channelMap = {};
+  channelData.items.forEach((ch) => {
+    channelMap[ch.id] = Number(ch.statistics.subscriberCount || 0);
+  });
+
+  // BUILD RESULTS
+  const results = videoData.items.map((video) => {
+    const stats = video.statistics || {};
+    const snippet = video.snippet || {};
+
+    const views = Number(stats.viewCount || 0);
+    const likes = Number(stats.likeCount || 0);
+    const comments = Number(stats.commentCount || 0);
+    const subs = channelMap[snippet.channelId] || 0;
+
+    const uploadTime = new Date(snippet.publishedAt);
+    const now = new Date();
+    const hoursSinceUpload = (now - uploadTime) / (1000 * 60 * 60);
+
+    const base = {
+      videoId: video.id,
+      title: snippet.title,
+      channel: snippet.channelTitle,
+      thumbnail: snippet.thumbnails?.high?.url || "",
+      publishedAt: snippet.publishedAt,
+      views,
+      likes,
+      comments,
+      subscribers: subs,
+      hoursSinceUpload: Math.round(hoursSinceUpload),
+      duration: video.contentDetails?.duration || "",
+    };
+
+    return { ...base, ...calculateAdvancedScore(base) };
+  });
+
+  // FILTER & SORT
+  const filtered = results
+    .filter((v) => v.subscribers >= minSubs)
+    .filter((v) => v.views >= minViews)
+    .sort((a, b) => b.trendScore - a.trendScore);
+
+  // PAGINATION
+  const pageSize = 10;
+  const start = (page - 1) * pageSize;
+  const paginated = filtered.slice(start, start + pageSize);
+
+  setCache(cacheKey, paginated);
+  return paginated;
+}
+
+// ==========================
+// ROUTES
+// ==========================
+
+// Health check
+app.get("/", (req, res) => {
+  res.json({
+    status: "Trend Intelligence API Running 🚀",
+    version: "2.0 Beast Mode",
+  });
+});
+
+// Main data route
 app.get("/data", async (req, res) => {
   try {
-    const {
-      q = "MrBeast",
-      region = "US",
-      max = 25,
-      minSubs = 10000,
-      minViews = 10000,
-      page = 1,
-    } = req.query;
-
-    const cacheKey = `${q}-${region}-${max}-${minSubs}-${minViews}-${page}`;
-    const cached = getCache(cacheKey);
-    if (cached) return res.json(cached);
-
-    // ======================
-    // SEARCH VIDEOS
-    // ======================
-    const searchRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
-        q
-      )}&type=video&order=date&maxResults=${max}&regionCode=${region}&key=${YT_API_KEY}`
-    );
-
-    const searchData = await searchRes.json();
-    if (!searchData.items || searchData.items.length === 0) return res.json([]);
-
-    const videoIds = searchData.items.map((i) => i.id.videoId).filter(Boolean);
-
-    // ======================
-    // VIDEO DETAILS
-    // ======================
-    const videoRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(
-        ","
-      )}&key=${YT_API_KEY}`
-    );
-    const videoData = await videoRes.json();
-
-    const channelIds = videoData.items.map((v) => v.snippet.channelId);
-
-    // ======================
-    // CHANNEL DETAILS
-    // ======================
-    const channelRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${[
-        ...new Set(channelIds),
-      ].join(",")}&key=${YT_API_KEY}`
-    );
-    const channelData = await channelRes.json();
-
-    const channelMap = {};
-    channelData.items.forEach((ch) => {
-      channelMap[ch.id] = Number(ch.statistics.subscriberCount || 0);
-    });
-
-    // ======================
-    // BUILD FINAL DATA
-    // ======================
-    const results = videoData.items.map((video) => {
-      const stats = video.statistics || {};
-      const snippet = video.snippet || {};
-
-      const views = Number(stats.viewCount || 0);
-      const likes = Number(stats.likeCount || 0);
-      const comments = Number(stats.commentCount || 0);
-      const subs = channelMap[snippet.channelId] || 0;
-
-      const uploadTime = new Date(snippet.publishedAt);
-      const now = new Date();
-      const hoursSinceUpload = (now - uploadTime) / (1000 * 60 * 60);
-
-      const base = {
-        videoId: video.id,
-        title: snippet.title,
-        channel: snippet.channelTitle,
-        thumbnail: snippet.thumbnails?.high?.url || "",
-        publishedAt: snippet.publishedAt,
-        views,
-        likes,
-        comments,
-        subscribers: subs,
-        hoursSinceUpload: Math.round(hoursSinceUpload),
-        duration: video.contentDetails?.duration || "",
-      };
-
-      return { ...base, ...calculateAdvancedScore(base) };
-    });
-
-    // ======================
-    // FILTER & SORT
-    // ======================
-    const filtered = results
-      .filter((v) => v.subscribers >= minSubs)
-      .filter((v) => v.views >= minViews)
-      .sort((a, b) => b.trendScore - a.trendScore);
-
-    // ======================
-    // PAGINATION
-    // ======================
-    const pageSize = 10;
-    const start = (page - 1) * pageSize;
-    const paginated = filtered.slice(start, start + pageSize);
-
-    setCache(cacheKey, paginated);
-
-    res.json(paginated);
+    const data = await fetchYouTubeData(req.query);
+    res.json(data);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Server error", details: err.message });
   }
 });
 
-// ==========================
-// ANALYTICS ROUTE
-// ==========================
+// Explore route (default trending query)
+app.get("/explore", async (req, res) => {
+  try {
+    const data = await fetchYouTubeData({
+      q: "Trending",
+      max: 15,
+      minSubs: 5000,
+      minViews: 5000,
+    });
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error", details: err.message });
+  }
+});
+
+// Analytics route
 app.get("/stats", (req, res) => {
   res.json({
     cachedQueries: Object.keys(cache).length,
@@ -199,13 +218,6 @@ app.get("/stats", (req, res) => {
 });
 
 // ==========================
-// HEALTH CHECK
+// START SERVER
 // ==========================
-app.get("/", (req, res) => {
-  res.json({
-    status: "Trend Intelligence API Running 🚀",
-    version: "2.0 Beast Mode",
-  });
-});
-
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
