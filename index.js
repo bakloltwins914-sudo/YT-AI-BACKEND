@@ -13,7 +13,23 @@ app.get("/", (req, res) => {
   res.send("Backend is running 🚀");
 });
 
-app.get("/explore", async (req, res) => {
+app.get("const searchResponse = await axios.get(
+  "https://www.googleapis.com/youtube/v3/search",
+  {
+    params: {
+      key: process.env.YOUTUBE_API_KEY,
+      q: query,
+      part: "snippet",
+      type: "video",
+      maxResults: 15,
+      order: "viewCount",
+      relevanceLanguage: "en",
+      regionCode: "US",
+      videoDuration: "short"
+    }
+  }
+);
+", async (req, res) => {
   const query = req.query.q;
 
   if (!query) {
