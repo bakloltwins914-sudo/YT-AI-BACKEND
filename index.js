@@ -1,141 +1,244 @@
 import express from "express";
-import axios from "axios";
-import dotenv from "dotenv";
-
-dotenv.config();
+import fetch from "node-fetch";
+import cors from "cors";
 
 const app = express();
+app.use(cors());
+app.use(express.json());
+
 const PORT = process.env.PORT || 3000;
+const YT_API_KEY = process.env.YT_API_KEY;
 
-app.get("/", (req, res) => {
-  res.json({ message: "Viral Detection Engine Running 🚀" });
-});
+// ==========================
+// CACHE SYSTEM
+// ==========================
+let cache = {};
+const CACHE_TIME = 10 * 60 * 1000; // 10 min
 
-app.get("/explore", async (req, res) => {
+function setCache(key, data) {
+  cache[key] = {
+    timestamp: Date.now(),
+    data
+  };
+}
+
+function getCache(key) {
+  const entry = cache[key];
+  if (!entry) return null;
+
+  if (Date.now() - entry.timestamp > CACHE_TIME) {
+    delete cache[key];
+    return null;
+  }
+
+  return entry.data;
+}
+
+// ==========================
+// ADVANCED VIRAL ENGINE
+// ==========================
+function calculateAdvancedScore(video) {
+  const {
+    views,
+    likes,
+    comments,
+    subscribers,
+    hoursSinceUpload
+  } = video;
+
+  const viewsPerHour =
+    hoursSinceUpload > 0 ? views / hoursSinceUpload : views;
+
+  const engagementRate =
+    views > 0 ? (likes + comments) / views : 0;
+
+  const subRatio =
+    subscribers > 0 ? views / subscribers : 0;
+
+  const velocityBoost =
+    hoursSinceUpload < 24 ? 1.5 :
+    hoursSinceUpload < 72 ? 1.2 : 1;
+
+  const ageDecay =
+    hoursSinceUpload > 168 ? 0.7 : 1;
+
+  const score =
+    (viewsPerHour * 0.5 +
+      engagementRate * 60000 +
+      subRatio * 2000) *
+    velocityBoost *
+    ageDecay;
+
+  let viralLevel = "Normal";
+
+  if (score > 300000) viralLevel = "Exploding";
+  else if (score > 150000) viralLevel = "Hot";
+  else if (score > 70000) viralLevel = "Trending";
+
+  return {
+    viewsPerHour: Math.round(viewsPerHour),
+    engagementRate: Number(engagementRate.toFixed(3)),
+    subRatio: Number(subRatio.toFixed(2)),
+    trendScore: Math.round(score),
+    viralLevel
+  };
+}
+
+// ==========================
+// MAIN DATA ROUTE
+// ==========================
+app.get("/data", async (req, res) => {
   try {
-    const query = req.query.q || "gaming";
+    if (!YT_API_KEY) {
+      return res.status(500).json({ error: "Missing API Key" });
+    }
 
-    const sevenDaysAgo = new Date(
-      Date.now() - 7 * 24 * 60 * 60 * 1000
-    ).toISOString();
+    const {
+      q = "MrBeast",
+      region = "US",
+      max = 25,
+      minSubs = 10000,
+      minViews = 10000,
+      page = 1
+    } = req.query;
 
-    // 🔎 STEP 1: Fetch recent US short-form uploads
-    const searchResponse = await axios.get(
-      "https://www.googleapis.com/youtube/v3/search",
-      {
-        params: {
-          key: process.env.YOUTUBE_API_KEY,
-          q: query,
-          part: "snippet",
-          type: "video",
-          maxResults: 30,
-          order: "date",
-          publishedAfter: sevenDaysAgo,
-          relevanceLanguage: "en",
-          regionCode: "US",
-          videoDuration: "short"
-        }
-      }
+    const cacheKey = `${q}-${region}-${max}-${minSubs}-${minViews}-${page}`;
+    const cached = getCache(cacheKey);
+    if (cached) return res.json(cached);
+
+    // ======================
+    // SEARCH VIDEOS
+    // ======================
+    const searchRes = await fetch(
+      `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${q}&type=video&order=date&maxResults=${max}&regionCode=${region}&key=${YT_API_KEY}`
     );
 
-    const videoIds = searchResponse.data.items.map(
-      (item) => item.id.videoId
-    );
+    const searchData = await searchRes.json();
+    const videoIds = searchData.items.map(i => i.id.videoId);
 
     if (!videoIds.length) {
       return res.json([]);
     }
 
-    // 📊 STEP 2: Get statistics
-    const statsResponse = await axios.get(
-      "https://www.googleapis.com/youtube/v3/videos",
-      {
-        params: {
-          key: process.env.YOUTUBE_API_KEY,
-          id: videoIds.join(","),
-          part: "statistics,snippet"
-        }
-      }
+    // ======================
+    // VIDEO DETAILS
+    // ======================
+    const videoRes = await fetch(
+      `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(",")}&key=${YT_API_KEY}`
     );
 
-    const now = new Date();
+    const videoData = await videoRes.json();
 
-    const processedVideos = statsResponse.data.items
-      .map((video) => {
-        const views = parseInt(video.statistics.viewCount || 0);
-        const likes = parseInt(video.statistics.likeCount || 0);
-        const comments = parseInt(video.statistics.commentCount || 0);
+    const channelIds = videoData.items.map(
+      v => v.snippet.channelId
+    );
 
-        const publishedAt = new Date(video.snippet.publishedAt);
-        const hoursSinceUpload =
-          (now - publishedAt) / (1000 * 60 * 60);
+    // ======================
+    // CHANNEL DETAILS
+    // ======================
+    const channelRes = await fetch(
+      `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelIds.join(",")}&key=${YT_API_KEY}`
+    );
 
-        if (hoursSinceUpload <= 0.5) return null;
+    const channelData = await channelRes.json();
 
-        // 📈 Velocity
-        const viewsPerHour = views / hoursSinceUpload;
-
-        // 💬 Engagement
-        const engagementRate =
-          views > 0 ? (likes + comments) / views : 0;
-
-        // 🚨 Quality filters
-        if (views < 500) return null;
-        if (engagementRate < 0.02) return null;
-
-        // 🔥 Recency boost
-        let recencyBoost = 1;
-        if (hoursSinceUpload <= 6) recencyBoost = 2.2;
-        else if (hoursSinceUpload <= 24) recencyBoost = 1.8;
-        else if (hoursSinceUpload <= 72) recencyBoost = 1.4;
-        else recencyBoost = 1.1;
-
-        // 💎 Engagement multiplier
-        const engagementBoost = 1 + engagementRate * 6;
-
-        // ⚡ Final trend score
-        const trendScore =
-          viewsPerHour *
-          recencyBoost *
-          engagementBoost;
-
-        // 🚀 Viral spike detection
-        let viralLevel = "Normal";
-        if (viewsPerHour > 20000 && engagementRate > 0.05)
-          viralLevel = "Breakout";
-        else if (viewsPerHour > 10000)
-          viralLevel = "Hot";
-        else if (viewsPerHour > 5000)
-          viralLevel = "Rising";
-
-        return {
-          videoId: video.id,
-          title: video.snippet.title,
-          channel: video.snippet.channelTitle,
-          publishedAt: video.snippet.publishedAt,
-          views,
-          likes,
-          comments,
-          hoursSinceUpload: Math.round(hoursSinceUpload),
-          viewsPerHour: Math.round(viewsPerHour),
-          engagementRate: Number(engagementRate.toFixed(3)),
-          trendScore: Math.round(trendScore),
-          viralLevel
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.trendScore - a.trendScore);
-
-    res.json(processedVideos);
-  } catch (error) {
-    console.error(error.response?.data || error.message);
-    res.status(500).json({
-      error: "Engine failure",
-      details: error.response?.data || error.message
+    const channelMap = {};
+    channelData.items.forEach(ch => {
+      channelMap[ch.id] = Number(
+        ch.statistics.subscriberCount || 0
+      );
     });
+
+    // ======================
+    // BUILD FINAL DATA
+    // ======================
+    const results = videoData.items.map(video => {
+      const stats = video.statistics;
+      const snippet = video.snippet;
+
+      const views = Number(stats.viewCount || 0);
+      const likes = Number(stats.likeCount || 0);
+      const comments = Number(stats.commentCount || 0);
+      const subs = channelMap[snippet.channelId] || 0;
+
+      const uploadTime = new Date(snippet.publishedAt);
+      const now = new Date();
+      const hoursSinceUpload =
+        (now - uploadTime) / (1000 * 60 * 60);
+
+      const base = {
+        videoId: video.id,
+        title: snippet.title,
+        channel: snippet.channelTitle,
+        thumbnail: snippet.thumbnails.high.url,
+        publishedAt: snippet.publishedAt,
+        views,
+        likes,
+        comments,
+        subscribers: subs,
+        hoursSinceUpload: Math.round(hoursSinceUpload),
+        duration: video.contentDetails.duration
+      };
+
+      return {
+        ...base,
+        ...calculateAdvancedScore(base)
+      };
+    });
+
+    // ======================
+    // FILTER
+    // ======================
+    const filtered = results
+      .filter(v => v.subscribers >= minSubs)
+      .filter(v => v.views >= minViews);
+
+    // ======================
+    // SORT
+    // ======================
+    filtered.sort((a, b) => b.trendScore - a.trendScore);
+
+    // ======================
+    // PAGINATION
+    // ======================
+    const pageSize = 10;
+    const start = (page - 1) * pageSize;
+    const paginated = filtered.slice(
+      start,
+      start + pageSize
+    );
+
+    setCache(cacheKey, paginated);
+
+    res.json(paginated);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// ==========================
+// ANALYTICS ROUTE
+// ==========================
+app.get("/stats", (req, res) => {
+  res.json({
+    cachedQueries: Object.keys(cache).length,
+    serverTime: new Date(),
+    uptimeSeconds: process.uptime()
+  });
 });
+
+// ==========================
+// HEALTH CHECK
+// ==========================
+app.get("/", (req, res) => {
+  res.json({
+    status: "Trend Intelligence API Running 🚀",
+    version: "2.0 Beast Mode"
+  });
+});
+
+app.listen(PORT, () =>
+  console.log(`Server running on port ${PORT}`)
+);
