@@ -7,15 +7,11 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.get("/", (req, res) => {
-  res.send("YouTube Shorts API is running 🚀");
-});
-
 app.get("/explore", async (req, res) => {
   try {
     const query = req.query.q || "mrbeast";
 
-    // 1️⃣ Search videos
+    // STEP 1 — Search videos
     const searchResponse = await axios.get(
       "https://www.googleapis.com/youtube/v3/search",
       {
@@ -25,44 +21,59 @@ app.get("/explore", async (req, res) => {
           part: "snippet",
           type: "video",
           maxResults: 15,
-          order: "viewCount",
-          videoDuration: "short",
+          order: "date",
+          relevanceLanguage: "en",
           regionCode: "US",
-          relevanceLanguage: "en"
+          videoDuration: "short"
         }
       }
     );
 
-    const videos = searchResponse.data.items;
+    const videoIds = searchResponse.data.items.map(
+      (item) => item.id.videoId
+    );
 
-    const videoIds = videos.map((video) => video.id.videoId).join(",");
-
-    // 2️⃣ Get statistics
+    // STEP 2 — Get stats
     const statsResponse = await axios.get(
       "https://www.googleapis.com/youtube/v3/videos",
       {
         params: {
           key: process.env.YOUTUBE_API_KEY,
-          id: videoIds,
+          id: videoIds.join(","),
           part: "statistics,snippet"
         }
       }
     );
 
-    const results = statsResponse.data.items.map((video) => {
+    const now = new Date();
+
+    const processedVideos = statsResponse.data.items.map((video) => {
       const views = parseInt(video.statistics.viewCount || 0);
       const likes = parseInt(video.statistics.likeCount || 0);
       const comments = parseInt(video.statistics.commentCount || 0);
 
-      const publishedAt = new Date(video.snippet.publishedAt);
-      const now = new Date();
-      const daysSinceUpload = Math.max(
-        1,
-        Math.floor((now - publishedAt) / (1000 * 60 * 60 * 24))
-      );
+      const publishedDate = new Date(video.snippet.publishedAt);
+      const daysSinceUpload =
+        (now - publishedDate) / (1000 * 60 * 60 * 24);
 
-      const viralScore = views > 0 ? ((likes + comments) / views) * 100 : 0;
-      const viewsPerDay = views / daysSinceUpload;
+      const viewsPerDay =
+        daysSinceUpload > 0 ? views / daysSinceUpload : views;
+
+      const engagementRate =
+        views > 0 ? (likes + comments) / views : 0;
+
+      // Recency boost (stronger boost if under 7 days old)
+      let recencyBoost = 1;
+      if (daysSinceUpload <= 1) recencyBoost = 3;
+      else if (daysSinceUpload <= 3) recencyBoost = 2;
+      else if (daysSinceUpload <= 7) recencyBoost = 1.5;
+      else if (daysSinceUpload <= 30) recencyBoost = 1.2;
+
+      // Final intelligent trend score
+      const trendScore =
+        viewsPerDay *
+        (1 + engagementRate * 5) *
+        recencyBoost;
 
       return {
         videoId: video.id,
@@ -72,18 +83,19 @@ app.get("/explore", async (req, res) => {
         views,
         likes,
         comments,
-        viralScore: Number(viralScore.toFixed(2)),
-        viewsPerDay: Math.floor(viewsPerDay)
+        viewsPerDay: Math.round(viewsPerDay),
+        engagementRate: Number(engagementRate.toFixed(4)),
+        trendScore: Math.round(trendScore)
       };
     });
 
-    // 3️⃣ Sort by velocity (most important for trends)
-    results.sort((a, b) => b.viewsPerDay - a.viewsPerDay);
+    // Sort by smartest trendScore
+    processedVideos.sort((a, b) => b.trendScore - a.trendScore);
 
-    res.json(results);
+    res.json(processedVideos);
 
   } catch (error) {
-    console.error("Error fetching videos:", error.response?.data || error.message);
+    console.error(error.response?.data || error.message);
     res.status(500).json({ error: "Something went wrong" });
   }
 });
