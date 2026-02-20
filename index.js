@@ -119,9 +119,7 @@ async function fetchYouTubeData(params = {}) {
     .filter(Boolean);
 
   const videoRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(
-      ","
-    )}&key=${YT_API_KEY}`
+    `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(",")}&key=${YT_API_KEY}`
   );
 
   if (!videoRes.ok) {
@@ -135,9 +133,7 @@ async function fetchYouTubeData(params = {}) {
   ];
 
   const channelRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelIds.join(
-      ","
-    )}&key=${YT_API_KEY}`
+    `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelIds.join(",")}&key=${YT_API_KEY}`
   );
 
   if (!channelRes.ok) {
@@ -211,11 +207,10 @@ app.get("/data", async (req, res) => {
   }
 });
 
-/* 🔥 FIXED PROCESS ROUTE */
+/* PROCESS */
 app.post("/process", async (req, res) => {
   try {
     const results = await fetchYouTubeData(req.body);
-
     const jobId = crypto.randomUUID();
 
     res.json({
@@ -229,9 +224,20 @@ app.post("/process", async (req, res) => {
   }
 });
 
+/* STATUS (🔥 THIS WAS MISSING) */
+app.get("/status/:jobId", (req, res) => {
+  const { jobId } = req.params;
+
+  res.json({
+    job_id: jobId,
+    status: "completed",
+  });
+});
+
 /* =========================================================
    START SERVER
 ========================================================= */
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
