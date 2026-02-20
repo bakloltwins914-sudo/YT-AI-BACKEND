@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import crypto from "crypto";
 
 const app = express();
 app.use(cors());
@@ -16,7 +17,7 @@ if (!YT_API_KEY) {
    SIMPLE MEMORY CACHE
 ========================================================= */
 const cache = {};
-const CACHE_TIME = 10 * 60 * 1000; // 10 minutes
+const CACHE_TIME = 10 * 60 * 1000;
 
 function setCache(key, data) {
   cache[key] = {
@@ -100,7 +101,6 @@ async function fetchYouTubeData(params = {}) {
   const cached = getCache(cacheKey);
   if (cached) return cached;
 
-  /* ---------------- SEARCH ---------------- */
   const searchRes = await fetch(
     `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
       q
@@ -118,7 +118,6 @@ async function fetchYouTubeData(params = {}) {
     .map((i) => i.id.videoId)
     .filter(Boolean);
 
-  /* ---------------- VIDEOS ---------------- */
   const videoRes = await fetch(
     `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(
       ","
@@ -131,7 +130,6 @@ async function fetchYouTubeData(params = {}) {
 
   const videoData = await videoRes.json();
 
-  /* ---------------- CHANNELS ---------------- */
   const channelIds = [
     ...new Set(videoData.items.map((v) => v.snippet.channelId)),
   ];
@@ -153,7 +151,6 @@ async function fetchYouTubeData(params = {}) {
     channelMap[ch.id] = Number(ch.statistics?.subscriberCount || 0);
   });
 
-  /* ---------------- PROCESS VIDEOS ---------------- */
   const results = videoData.items.map((video) => {
     const stats = video.statistics || {};
     const snippet = video.snippet || {};
@@ -197,34 +194,37 @@ async function fetchYouTubeData(params = {}) {
    ROUTES
 ========================================================= */
 
-// ✅ Railway health check
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "OK" });
 });
 
-// Root
 app.get("/", (req, res) => {
   res.json({ status: "Trend Intelligence API Running 🚀" });
 });
 
-// GET route
 app.get("/data", async (req, res) => {
   try {
     const data = await fetchYouTubeData(req.query);
     res.json(data);
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST route
+/* 🔥 FIXED PROCESS ROUTE */
 app.post("/process", async (req, res) => {
   try {
-    const data = await fetchYouTubeData(req.body);
-    res.json(data);
+    const results = await fetchYouTubeData(req.body);
+
+    const jobId = crypto.randomUUID();
+
+    res.json({
+      job_id: jobId,
+      status: "completed",
+      results: results,
+    });
+
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
