@@ -8,19 +8,21 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const YT_API_KEY = process.env.YT_API_KEY;
 
-// Proper API key check
 if (!YT_API_KEY) {
-  console.warn("⚠️ YT_API_KEY not set!");
+  console.warn("⚠️ WARNING: YT_API_KEY not set!");
 }
 
-// ==========================
-// CACHE SYSTEM
-// ==========================
+/* =========================================================
+   SIMPLE MEMORY CACHE
+========================================================= */
 const cache = {};
-const CACHE_TIME = 10 * 60 * 1000;
+const CACHE_TIME = 10 * 60 * 1000; // 10 minutes
 
 function setCache(key, data) {
-  cache[key] = { timestamp: Date.now(), data };
+  cache[key] = {
+    timestamp: Date.now(),
+    data,
+  };
 }
 
 function getCache(key) {
@@ -35,9 +37,9 @@ function getCache(key) {
   return entry.data;
 }
 
-// ==========================
-// VIRAL SCORE
-// ==========================
+/* =========================================================
+   VIRAL SCORE CALCULATOR
+========================================================= */
 function calculateAdvancedScore(video) {
   const { views, likes, comments, subscribers, hoursSinceUpload } = video;
 
@@ -78,11 +80,13 @@ function calculateAdvancedScore(video) {
   };
 }
 
-// ==========================
-// YOUTUBE FUNCTION
-// ==========================
+/* =========================================================
+   YOUTUBE FETCH FUNCTION
+========================================================= */
 async function fetchYouTubeData(params = {}) {
-  if (!YT_API_KEY) throw new Error("Missing YT_API_KEY");
+  if (!YT_API_KEY) {
+    throw new Error("Missing YT_API_KEY environment variable");
+  }
 
   const {
     q = "MrBeast",
@@ -90,50 +94,67 @@ async function fetchYouTubeData(params = {}) {
     max = 25,
     minSubs = 10000,
     minViews = 10000,
-    page = 1,
   } = params;
 
-  const cacheKey = `${q}-${region}-${max}-${minSubs}-${minViews}-${page}`;
+  const cacheKey = `${q}-${region}-${max}-${minSubs}-${minViews}`;
   const cached = getCache(cacheKey);
   if (cached) return cached;
 
+  /* ---------------- SEARCH ---------------- */
   const searchRes = await fetch(
     `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
       q
     )}&type=video&order=date&maxResults=${max}&regionCode=${region}&key=${YT_API_KEY}`
   );
 
-  if (!searchRes.ok) throw new Error("YouTube Search API failed");
+  if (!searchRes.ok) {
+    throw new Error("YouTube Search API failed");
+  }
 
   const searchData = await searchRes.json();
   if (!searchData.items?.length) return [];
 
-  const videoIds = searchData.items.map(i => i.id.videoId).filter(Boolean);
+  const videoIds = searchData.items
+    .map((i) => i.id.videoId)
+    .filter(Boolean);
 
+  /* ---------------- VIDEOS ---------------- */
   const videoRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(",")}&key=${YT_API_KEY}`
+    `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(
+      ","
+    )}&key=${YT_API_KEY}`
   );
 
-  if (!videoRes.ok) throw new Error("YouTube Video API failed");
+  if (!videoRes.ok) {
+    throw new Error("YouTube Video API failed");
+  }
 
   const videoData = await videoRes.json();
 
-  const channelIds = [...new Set(videoData.items.map(v => v.snippet.channelId))];
+  /* ---------------- CHANNELS ---------------- */
+  const channelIds = [
+    ...new Set(videoData.items.map((v) => v.snippet.channelId)),
+  ];
 
   const channelRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelIds.join(",")}&key=${YT_API_KEY}`
+    `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelIds.join(
+      ","
+    )}&key=${YT_API_KEY}`
   );
 
-  if (!channelRes.ok) throw new Error("YouTube Channel API failed");
+  if (!channelRes.ok) {
+    throw new Error("YouTube Channel API failed");
+  }
 
   const channelData = await channelRes.json();
 
   const channelMap = {};
-  channelData.items.forEach(ch => {
+  channelData.items.forEach((ch) => {
     channelMap[ch.id] = Number(ch.statistics?.subscriberCount || 0);
   });
 
-  const results = videoData.items.map(video => {
+  /* ---------------- PROCESS VIDEOS ---------------- */
+  const results = videoData.items.map((video) => {
     const stats = video.statistics || {};
     const snippet = video.snippet || {};
 
@@ -164,17 +185,27 @@ async function fetchYouTubeData(params = {}) {
   });
 
   const filtered = results
-    .filter(v => v.subscribers >= Number(minSubs))
-    .filter(v => v.views >= Number(minViews))
+    .filter((v) => v.subscribers >= Number(minSubs))
+    .filter((v) => v.views >= Number(minViews))
     .sort((a, b) => b.trendScore - a.trendScore);
 
   setCache(cacheKey, filtered);
   return filtered;
 }
 
-// ==========================
-// ROUTES
-// ==========================
+/* =========================================================
+   ROUTES
+========================================================= */
+
+// ✅ Railway health check
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "OK" });
+});
+
+// Root
+app.get("/", (req, res) => {
+  res.json({ status: "Trend Intelligence API Running 🚀" });
+});
 
 // GET route
 app.get("/data", async (req, res) => {
@@ -182,24 +213,25 @@ app.get("/data", async (req, res) => {
     const data = await fetchYouTubeData(req.query);
     res.json(data);
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ✅ RESTORED PROCESS ROUTE (POST)
+// POST route
 app.post("/process", async (req, res) => {
   try {
     const data = await fetchYouTubeData(req.body);
     res.json(data);
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/", (req, res) => {
-  res.json({ status: "Trend Intelligence API Running 🚀" });
-});
-
+/* =========================================================
+   START SERVER
+========================================================= */
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
