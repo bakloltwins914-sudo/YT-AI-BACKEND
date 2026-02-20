@@ -15,8 +15,8 @@ if (!YT_API_KEY) {
 // ==========================
 // CACHE SYSTEM
 // ==========================
-let cache = {};
-const CACHE_TIME = 10 * 60 * 1000;
+const cache = {};
+const CACHE_TIME = 10 * 60 * 1000; // 10 minutes
 
 function setCache(key, data) {
   cache[key] = { timestamp: Date.now(), data };
@@ -40,16 +40,26 @@ function getCache(key) {
 function calculateAdvancedScore(video) {
   const { views, likes, comments, subscribers, hoursSinceUpload } = video;
 
-  const viewsPerHour = hoursSinceUpload > 0 ? views / hoursSinceUpload : views;
-  const engagementRate = views > 0 ? (likes + comments) / views : 0;
-  const subRatio = subscribers > 0 ? views / subscribers : 0;
+  const viewsPerHour =
+    hoursSinceUpload > 0 ? views / hoursSinceUpload : views;
+
+  const engagementRate =
+    views > 0 ? (likes + comments) / views : 0;
+
+  const subRatio =
+    subscribers > 0 ? views / subscribers : 0;
 
   const velocityBoost =
-    hoursSinceUpload < 24 ? 1.5 : hoursSinceUpload < 72 ? 1.2 : 1;
-  const ageDecay = hoursSinceUpload > 168 ? 0.7 : 1;
+    hoursSinceUpload < 24 ? 1.5 :
+    hoursSinceUpload < 72 ? 1.2 : 1;
+
+  const ageDecay =
+    hoursSinceUpload > 168 ? 0.7 : 1;
 
   const score =
-    (viewsPerHour * 0.5 + engagementRate * 60000 + subRatio * 2000) *
+    (viewsPerHour * 0.5 +
+      engagementRate * 60000 +
+      subRatio * 2000) *
     velocityBoost *
     ageDecay;
 
@@ -68,23 +78,25 @@ function calculateAdvancedScore(video) {
 }
 
 // ==========================
-// MAIN FUNCTION
+// YOUTUBE FETCH FUNCTION
 // ==========================
-async function fetchYouTubeData({
-  q = "MrBeast",
-  region = "US",
-  max = 25,
-  minSubs = 10000,
-  minViews = 10000,
-  page = 1,
-}) {
+async function fetchYouTubeData(params = {}) {
   if (!YT_API_KEY) return [];
+
+  const {
+    q = "MrBeast",
+    region = "US",
+    max = 25,
+    minSubs = 10000,
+    minViews = 10000,
+    page = 1,
+  } = params;
 
   const cacheKey = `${q}-${region}-${max}-${minSubs}-${minViews}-${page}`;
   const cached = getCache(cacheKey);
   if (cached) return cached;
 
-  // SEARCH
+  // SEARCH API
   const searchRes = await fetch(
     `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
       q
@@ -92,7 +104,7 @@ async function fetchYouTubeData({
   );
 
   if (!searchRes.ok) {
-    throw new Error("Search API failed");
+    throw new Error("YouTube Search API failed");
   }
 
   const searchData = await searchRes.json();
@@ -110,7 +122,7 @@ async function fetchYouTubeData({
   );
 
   if (!videoRes.ok) {
-    throw new Error("Video API failed");
+    throw new Error("YouTube Video API failed");
   }
 
   const videoData = await videoRes.json();
@@ -127,7 +139,7 @@ async function fetchYouTubeData({
   );
 
   if (!channelRes.ok) {
-    throw new Error("Channel API failed");
+    throw new Error("YouTube Channel API failed");
   }
 
   const channelData = await channelRes.json();
@@ -144,11 +156,12 @@ async function fetchYouTubeData({
     const views = Number(stats.viewCount || 0);
     const likes = Number(stats.likeCount || 0);
     const comments = Number(stats.commentCount || 0);
-    const subs = channelMap[snippet.channelId] || 0;
+    const subscribers = channelMap[snippet.channelId] || 0;
 
     const uploadTime = new Date(snippet.publishedAt);
     const hoursSinceUpload =
-      (Date.now() - uploadTime.getTime()) / (1000 * 60 * 60);
+      (Date.now() - uploadTime.getTime()) /
+      (1000 * 60 * 60);
 
     const base = {
       videoId: video.id,
@@ -159,7 +172,7 @@ async function fetchYouTubeData({
       views,
       likes,
       comments,
-      subscribers: subs,
+      subscribers,
       hoursSinceUpload: Math.round(hoursSinceUpload),
       duration: video.contentDetails?.duration || "",
     };
@@ -168,12 +181,12 @@ async function fetchYouTubeData({
   });
 
   const filtered = results
-    .filter((v) => v.subscribers >= minSubs)
-    .filter((v) => v.views >= minViews)
+    .filter((v) => v.subscribers >= Number(minSubs))
+    .filter((v) => v.views >= Number(minViews))
     .sort((a, b) => b.trendScore - a.trendScore);
 
   const pageSize = 10;
-  const start = (page - 1) * pageSize;
+  const start = (Number(page) - 1) * pageSize;
   const paginated = filtered.slice(start, start + pageSize);
 
   setCache(cacheKey, paginated);
@@ -183,6 +196,7 @@ async function fetchYouTubeData({
 // ==========================
 // ROUTES
 // ==========================
+
 app.get("/", (req, res) => {
   res.json({ status: "Trend Intelligence API Running 🚀" });
 });
@@ -190,10 +204,10 @@ app.get("/", (req, res) => {
 app.get("/data", async (req, res) => {
   try {
     const data = await fetchYouTubeData(req.query);
-    return res.json(data);
+    res.json(data);
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -205,20 +219,20 @@ app.get("/explore", async (req, res) => {
       minSubs: 5000,
       minViews: 5000,
     });
-    return res.json(data);
+    res.json(data);
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
 app.get("/stats", (req, res) => {
   res.json({
     cachedQueries: Object.keys(cache).length,
-    uptimeSeconds: process.uptime(),
+    uptimeSeconds: Math.round(process.uptime()),
   });
 });
 
-app.listen(PORT, () =>
-  console.log(`Server running on port ${PORT}`)
-);
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
