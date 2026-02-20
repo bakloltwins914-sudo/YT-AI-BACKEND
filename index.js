@@ -8,6 +8,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const YT_API_KEY = process.env.YT_API_KEY;
 
+// Proper API key check
 if (!YT_API_KEY) {
   console.warn("⚠️ YT_API_KEY not set!");
 }
@@ -16,7 +17,7 @@ if (!YT_API_KEY) {
 // CACHE SYSTEM
 // ==========================
 const cache = {};
-const CACHE_TIME = 10 * 60 * 1000; // 10 minutes
+const CACHE_TIME = 10 * 60 * 1000;
 
 function setCache(key, data) {
   cache[key] = { timestamp: Date.now(), data };
@@ -78,10 +79,10 @@ function calculateAdvancedScore(video) {
 }
 
 // ==========================
-// YOUTUBE FETCH FUNCTION
+// YOUTUBE FUNCTION
 // ==========================
 async function fetchYouTubeData(params = {}) {
-  if (!YT_API_KEY) return [];
+  if (!YT_API_KEY) throw new Error("Missing YT_API_KEY");
 
   const {
     q = "MrBeast",
@@ -96,60 +97,43 @@ async function fetchYouTubeData(params = {}) {
   const cached = getCache(cacheKey);
   if (cached) return cached;
 
-  // SEARCH API
   const searchRes = await fetch(
     `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
       q
     )}&type=video&order=date&maxResults=${max}&regionCode=${region}&key=${YT_API_KEY}`
   );
 
-  if (!searchRes.ok) {
-    throw new Error("YouTube Search API failed");
-  }
+  if (!searchRes.ok) throw new Error("YouTube Search API failed");
 
   const searchData = await searchRes.json();
   if (!searchData.items?.length) return [];
 
-  const videoIds = searchData.items
-    .map((i) => i.id.videoId)
-    .filter(Boolean);
+  const videoIds = searchData.items.map(i => i.id.videoId).filter(Boolean);
 
-  // VIDEO DETAILS
   const videoRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(
-      ","
-    )}&key=${YT_API_KEY}`
+    `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(",")}&key=${YT_API_KEY}`
   );
 
-  if (!videoRes.ok) {
-    throw new Error("YouTube Video API failed");
-  }
+  if (!videoRes.ok) throw new Error("YouTube Video API failed");
 
   const videoData = await videoRes.json();
 
-  // CHANNEL DETAILS
-  const channelIds = [
-    ...new Set(videoData.items.map((v) => v.snippet.channelId)),
-  ];
+  const channelIds = [...new Set(videoData.items.map(v => v.snippet.channelId))];
 
   const channelRes = await fetch(
-    `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelIds.join(
-      ","
-    )}&key=${YT_API_KEY}`
+    `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${channelIds.join(",")}&key=${YT_API_KEY}`
   );
 
-  if (!channelRes.ok) {
-    throw new Error("YouTube Channel API failed");
-  }
+  if (!channelRes.ok) throw new Error("YouTube Channel API failed");
 
   const channelData = await channelRes.json();
 
   const channelMap = {};
-  channelData.items.forEach((ch) => {
+  channelData.items.forEach(ch => {
     channelMap[ch.id] = Number(ch.statistics?.subscriberCount || 0);
   });
 
-  const results = videoData.items.map((video) => {
+  const results = videoData.items.map(video => {
     const stats = video.statistics || {};
     const snippet = video.snippet || {};
 
@@ -160,8 +144,7 @@ async function fetchYouTubeData(params = {}) {
 
     const uploadTime = new Date(snippet.publishedAt);
     const hoursSinceUpload =
-      (Date.now() - uploadTime.getTime()) /
-      (1000 * 60 * 60);
+      (Date.now() - uploadTime.getTime()) / (1000 * 60 * 60);
 
     const base = {
       videoId: video.id,
@@ -181,56 +164,40 @@ async function fetchYouTubeData(params = {}) {
   });
 
   const filtered = results
-    .filter((v) => v.subscribers >= Number(minSubs))
-    .filter((v) => v.views >= Number(minViews))
+    .filter(v => v.subscribers >= Number(minSubs))
+    .filter(v => v.views >= Number(minViews))
     .sort((a, b) => b.trendScore - a.trendScore);
 
-  const pageSize = 10;
-  const start = (Number(page) - 1) * pageSize;
-  const paginated = filtered.slice(start, start + pageSize);
-
-  setCache(cacheKey, paginated);
-  return paginated;
+  setCache(cacheKey, filtered);
+  return filtered;
 }
 
 // ==========================
 // ROUTES
 // ==========================
 
-app.get("/", (req, res) => {
-  res.json({ status: "Trend Intelligence API Running 🚀" });
-});
-
+// GET route
 app.get("/data", async (req, res) => {
   try {
     const data = await fetchYouTubeData(req.query);
     res.json(data);
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/explore", async (req, res) => {
+// ✅ RESTORED PROCESS ROUTE (POST)
+app.post("/process", async (req, res) => {
   try {
-    const data = await fetchYouTubeData({
-      q: "Trending",
-      max: 15,
-      minSubs: 5000,
-      minViews: 5000,
-    });
+    const data = await fetchYouTubeData(req.body);
     res.json(data);
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/stats", (req, res) => {
-  res.json({
-    cachedQueries: Object.keys(cache).length,
-    uptimeSeconds: Math.round(process.uptime()),
-  });
+app.get("/", (req, res) => {
+  res.json({ status: "Trend Intelligence API Running 🚀" });
 });
 
 app.listen(PORT, () => {
