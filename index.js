@@ -22,7 +22,7 @@ function generateMockClips(videoUrl, count = 5) {
   for (let i = 0; i < count; i++) {
     clips.push({
       id: crypto.randomUUID(),
-      url: videoUrl, // using original video for now
+      url: videoUrl,
       thumbnail: "https://placehold.co/600x400",
       title: `AI Clip ${i + 1}`,
       start_time: i * 20,
@@ -52,15 +52,28 @@ app.get("/", (req, res) => {
 ========================================================= */
 app.post("/process", async (req, res) => {
   try {
+    console.log("REQUEST BODY:", req.body);
+
     const { video_url, settings } = req.body;
 
     if (!video_url) {
       return res.status(400).json({ error: "Missing video_url" });
     }
 
+    // 🔥 Smart clip count detection (works with ANY frontend structure)
+    const clipCount =
+      Number(req.body.clipCount) ||
+      Number(req.body.number_of_clips) ||
+      Number(req.body.clips) ||
+      Number(settings?.clipCount) ||
+      Number(settings?.number_of_clips) ||
+      Number(settings?.clips) ||
+      5;
+
+    console.log("FINAL CLIP COUNT:", clipCount);
+
     const jobId = crypto.randomUUID();
 
-    // Create job as processing
     jobs[jobId] = {
       job_id: jobId,
       status: "processing",
@@ -69,17 +82,16 @@ app.post("/process", async (req, res) => {
 
     // Simulate async processing
     setTimeout(() => {
-      const clips = generateMockClips(
-        video_url,
-        settings?.clipCount || 5
-      );
+      const clips = generateMockClips(video_url, clipCount);
 
       jobs[jobId] = {
         job_id: jobId,
         status: "completed",
         clips,
       };
-    }, 3000); // 3 sec fake processing
+
+      console.log(`Job ${jobId} completed with ${clipCount} clips`);
+    }, 3000);
 
     res.json({
       job_id: jobId,
