@@ -43,10 +43,12 @@ app.get("/", (req, res) => {
 });
 
 /* =========================================================
-   PROCESS (INSTANT COMPLETE — NO JOB STORAGE)
+   PROCESS (INSTANT COMPLETE)
 ========================================================= */
 app.post("/process", async (req, res) => {
   try {
+    console.log("REQUEST BODY:", req.body);
+
     const { video_url, settings } = req.body;
 
     if (!video_url) {
@@ -62,19 +64,26 @@ app.post("/process", async (req, res) => {
       Number(settings?.clips) ||
       5;
 
+    const jobId = crypto.randomUUID();
+
     const clips = generateMockClips(video_url, clipCount);
 
+    // 👇 return COMPLETED immediately
     res.json({
-      job_id: crypto.randomUUID(),
+      job_id: jobId,
       status: "completed",
-      clips,
+      clips: clips,
     });
 
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
+/* =========================================================
+   START SERVER
+========================================================= */
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
