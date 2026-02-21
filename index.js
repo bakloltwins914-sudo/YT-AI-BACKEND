@@ -1,6 +1,16 @@
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegPath from "ffmpeg-static";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+ffmpeg.setFfmpegPath(ffmpegPath);
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
@@ -9,30 +19,26 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 /* =========================================================
-   FAKE JOB STORAGE (IN MEMORY)
+   STORAGE
 ========================================================= */
 const jobs = {};
 
+const CLIP_DIR = path.join(__dirname, "clips");
+if (!fs.existsSync(CLIP_DIR)) fs.mkdirSync(CLIP_DIR);
+
 /* =========================================================
-   MOCK CLIP GENERATOR (Simulates AI)
+   CUT REAL CLIP FUNCTION
 ========================================================= */
-function generateMockClips(videoUrl, count = 5) {
-  const clips = [];
-
-  for (let i = 0; i < count; i++) {
-    clips.push({
-      id: crypto.randomUUID(),
-      url: videoUrl,
-      thumbnail: "https://placehold.co/600x400",
-      title: `AI Clip ${i + 1}`,
-      start_time: i * 20,
-      end_time: i * 20 + 30,
-      duration: 30,
-      viral_score: Math.floor(Math.random() * 100),
-    });
-  }
-
-  return clips;
+function cutClip(inputUrl, start, duration, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputUrl)
+      .setStartTime(start)
+      .setDuration(duration)
+      .output(outputPath)
+      .on("end", () => resolve())
+      .on("error", (err) => reject(err))
+      .run();
+  });
 }
 
 /* =========================================================
@@ -52,25 +58,16 @@ app.get("/", (req, res) => {
 ========================================================= */
 app.post("/process", async (req, res) => {
   try {
-    console.log("REQUEST BODY:", req.body);
-
     const { video_url, settings } = req.body;
 
     if (!video_url) {
       return res.status(400).json({ error: "Missing video_url" });
     }
 
-    // 🔥 Smart clip count detection (works with ANY frontend structure)
     const clipCount =
       Number(req.body.clipCount) ||
-      Number(req.body.number_of_clips) ||
-      Number(req.body.clips) ||
       Number(settings?.clipCount) ||
-      Number(settings?.number_of_clips) ||
-      Number(settings?.clips) ||
       5;
-
-    console.log("FINAL CLIP COUNT:", clipCount);
 
     const jobId = crypto.randomUUID();
 
@@ -80,26 +77,42 @@ app.post("/process", async (req, res) => {
       clips: [],
     };
 
-    // Simulate async processing
-    setTimeout(() => {
-      const clips = generateMockClips(video_url, clipCount);
-
-      jobs[jobId] = {
-        job_id: jobId,
-        status: "completed",
-        clips,
-      };
-
-      console.log(`Job ${jobId} completed with ${clipCount} clips`);
-    }, 3000);
-
     res.json({
       job_id: jobId,
       status: "processing",
     });
 
+    // 🔥 REAL PROCESSING
+    const clips = [];
+
+    for (let i = 0; i < clipCount; i++) {
+      const start = i * 20;
+      const duration = 20;
+      const outputFile = `clip_${jobId}_${i}.mp4`;
+      const outputPath = path.join(CLIP_DIR, outputFile);
+
+      await cutClip(video_url, start, duration, outputPath);
+
+      clips.push({
+        id: crypto.randomUUID(),
+        url: `${req.protocol}://${req.get("host")}/clips/${outputFile}`,
+        thumbnail: "https://placehold.co/600x400",
+        title: `AI Clip ${i + 1}`,
+        start_time: start,
+        end_time: start + duration,
+        duration,
+        viral_score: Math.floor(Math.random() * 100),
+      });
+    }
+
+    jobs[jobId] = {
+      job_id: jobId,
+      status: "completed",
+      clips,
+    };
+
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error(err);
   }
 });
 
@@ -107,16 +120,15 @@ app.post("/process", async (req, res) => {
    STATUS ROUTE
 ========================================================= */
 app.get("/status/:jobId", (req, res) => {
-  const { jobId } = req.params;
-
-  const job = jobs[jobId];
-
-  if (!job) {
-    return res.status(404).json({ error: "Job not found" });
-  }
-
+  const job = jobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: "Job not found" });
   res.json(job);
 });
+
+/* =========================================================
+   SERVE CLIPS
+========================================================= */
+app.use("/clips", express.static(CLIP_DIR));
 
 /* =========================================================
    START SERVER
