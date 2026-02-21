@@ -32,6 +32,23 @@ function extractVideoId(url) {
   }
 }
 
+function generateSmartTitle(index) {
+  const hooks = [
+    "This Changed Everything",
+    "Nobody Talks About This",
+    "The Hidden Truth",
+    "This Was Unexpected",
+    "The Most Important Moment",
+    "This Is Crazy",
+    "You Won't Believe This",
+    "This Part Is Insane"
+  ];
+
+  const randomHook = hooks[Math.floor(Math.random() * hooks.length)];
+
+  return `${randomHook} (#${index})`;
+}
+
 /* =========================================================
    ROUTES
 ========================================================= */
@@ -45,7 +62,7 @@ app.get("/health", (req, res) => {
 });
 
 /* =========================================================
-   PROCESS ROUTE (TIMESTAMP VERSION)
+   PROCESS ROUTE (SMART TIMESTAMP VERSION)
 ========================================================= */
 
 app.post("/process", async (req, res) => {
@@ -62,8 +79,16 @@ app.post("/process", async (req, res) => {
       return res.status(400).json({ error: "Invalid YouTube URL" });
     }
 
-    const clipCount = Number(settings?.clipCount) || 3;
-    const duration = 30; // 30 sec moments
+    // 🔥 FIXED SLIDER HANDLING
+    const clipCount =
+      Number(req.body.clipCount) ||
+      Number(settings?.clipCount) ||
+      Number(settings?.number_of_clips) ||
+      Number(settings?.clips) ||
+      3;
+
+    // Safety limits
+    const safeClipCount = Math.min(Math.max(clipCount, 1), 10);
 
     const jobId = crypto.randomUUID();
 
@@ -75,31 +100,57 @@ app.post("/process", async (req, res) => {
 
     res.json({ job_id: jobId, status: "processing" });
 
-    // 🔥 Background fake AI scoring (replace later with real AI)
+    // 🔥 Background AI-like processing
     setTimeout(() => {
-      const clips = [];
+      try {
+        const clips = [];
 
-      for (let i = 0; i < clipCount; i++) {
-        const start = i * 60; // Example spacing
-        const end = start + duration;
+        // Simulated video length (30 mins)
+        const simulatedVideoLength = 1800;
+        const duration = 30;
 
-        clips.push({
-          id: crypto.randomUUID(),
-          title: `AI Moment ${i + 1}`,
-          start_time: start,
-          end_time: end,
-          duration,
-          url: `https://www.youtube.com/watch?v=${videoId}&t=${start}s`
-        });
+        const usedStarts = new Set();
+
+        for (let i = 0; i < safeClipCount; i++) {
+
+          let start;
+
+          // Spread clips randomly across full video
+          do {
+            start = Math.floor(
+              Math.random() * (simulatedVideoLength - duration)
+            );
+          } while (usedStarts.has(start));
+
+          usedStarts.add(start);
+
+          const end = start + duration;
+
+          clips.push({
+            id: crypto.randomUUID(),
+            title: generateSmartTitle(i + 1),
+            start_time: start,
+            end_time: end,
+            duration,
+            url: `https://www.youtube.com/watch?v=${videoId}&t=${start}s`,
+          });
+        }
+
+        jobs[jobId] = {
+          job_id: jobId,
+          status: "completed",
+          clips,
+        };
+
+      } catch (err) {
+        console.error("PROCESS FAILED:", err);
+        jobs[jobId] = {
+          job_id: jobId,
+          status: "failed",
+          clips: [],
+        };
       }
-
-      jobs[jobId] = {
-        job_id: jobId,
-        status: "completed",
-        clips,
-      };
-
-    }, 2000); // simulate processing time
+    }, 1500);
 
   } catch (err) {
     console.error(err);
