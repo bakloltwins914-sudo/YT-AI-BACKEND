@@ -27,7 +27,7 @@ if (!fs.existsSync(CLIP_DIR)) {
 app.use("/clips", express.static(CLIP_DIR));
 
 /* =========================================================
-   UTIL: RUN COMMAND
+   UTIL
 ========================================================= */
 
 function runCommand(cmd) {
@@ -37,7 +37,7 @@ function runCommand(cmd) {
         console.error(stderr);
         reject(error);
       } else {
-        resolve(stdout);
+        resolve(stdout.trim());
       }
     });
   });
@@ -56,7 +56,7 @@ app.get("/health", (req, res) => {
 });
 
 /* =========================================================
-   PROCESS ROUTE
+   PROCESS ROUTE (STREAM CUT VERSION)
 ========================================================= */
 
 app.post("/process", async (req, res) => {
@@ -67,11 +67,7 @@ app.post("/process", async (req, res) => {
       return res.status(400).json({ error: "Missing video_url" });
     }
 
-    const clipCount =
-      Number(req.body.clipCount) ||
-      Number(settings?.clipCount) ||
-      2;
-
+    const clipCount = Number(settings?.clipCount) || 2;
     const aspect = settings?.aspect_ratio || "9:16";
     const captionsEnabled = settings?.auto_captions || false;
 
@@ -85,14 +81,12 @@ app.post("/process", async (req, res) => {
 
     res.json({ job_id: jobId, status: "processing" });
 
-    // 🔥 Background processing
+    // 🔥 BACKGROUND PROCESS
     (async () => {
       try {
-        const videoPath = path.join(CLIP_DIR, `${jobId}.mp4`);
-
-        // 1️⃣ Download YouTube video
-        await runCommand(
-          `yt-dlp -f mp4 -o "${videoPath}" "${video_url}"`
+        // 1️⃣ Get direct stream URL (NO DOWNLOAD)
+        const streamUrl = await runCommand(
+          `yt-dlp -g "${video_url}"`
         );
 
         const clips = [];
@@ -100,35 +94,41 @@ app.post("/process", async (req, res) => {
         for (let i = 0; i < clipCount; i++) {
           const start = i * 30;
           const duration = 30;
+
           const outputPath = path.join(CLIP_DIR, `${jobId}_clip_${i}.mp4`);
 
           let scaleFilter = "";
-
           if (aspect === "9:16") scaleFilter = "scale=1080:1920";
           if (aspect === "16:9") scaleFilter = "scale=1920:1080";
           if (aspect === "1:1") scaleFilter = "scale=1080:1080";
           if (aspect === "4:5") scaleFilter = "scale=1080:1350";
 
+          // 2️⃣ Cut directly from stream
           await runCommand(
-            `ffmpeg -ss ${start} -t ${duration} -i "${videoPath}" -vf "${scaleFilter}" -c:a copy "${outputPath}" -y`
+            `ffmpeg -ss ${start} -t ${duration} -i "${streamUrl}" -vf "${scaleFilter}" -c:a copy "${outputPath}" -y`
           );
 
-          // 2️⃣ Add captions if enabled
+          let finalOutput = outputPath;
+
+          // 3️⃣ Optional captions
           if (captionsEnabled) {
             await runCommand(
               `whisper "${outputPath}" --model tiny --output_format srt`
             );
 
             const srtFile = outputPath.replace(".mp4", ".srt");
+            const captioned = outputPath.replace(".mp4", "_captioned.mp4");
 
             await runCommand(
-              `ffmpeg -i "${outputPath}" -vf subtitles="${srtFile}" "${outputPath.replace(".mp4", "_captioned.mp4")}" -y`
+              `ffmpeg -i "${outputPath}" -vf subtitles="${srtFile}" "${captioned}" -y`
             );
+
+            finalOutput = captioned;
           }
 
           clips.push({
             id: crypto.randomUUID(),
-            url: `${req.protocol}://${req.get("host")}/clips/${path.basename(outputPath)}`,
+            url: `${req.protocol}://${req.get("host")}/clips/${path.basename(finalOutput)}`,
             title: `AI Clip ${i + 1}`,
             start_time: start,
             end_time: start + duration,
@@ -143,7 +143,7 @@ app.post("/process", async (req, res) => {
         };
 
       } catch (err) {
-        console.error(err);
+        console.error("PROCESS FAILED:", err);
         jobs[jobId] = {
           job_id: jobId,
           status: "failed",
