@@ -1,12 +1,22 @@
-FROM node:20
+# Use full Debian Node image (not alpine)
+FROM node:20-bullseye
 
-# Install system deps
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     python3 \
+    python3-venv \
     python3-pip \
-    && pip3 install yt-dlp openai-whisper \
+    curl \
     && apt-get clean
+
+# Create virtual environment to bypass PEP 668
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install yt-dlp inside virtual environment
+RUN pip install --upgrade pip
+RUN pip install yt-dlp
 
 # Create app directory
 WORKDIR /app
@@ -23,5 +33,5 @@ COPY . .
 # Expose port
 EXPOSE 3000
 
-# Start app
+# Start server
 CMD ["node", "index.js"]
