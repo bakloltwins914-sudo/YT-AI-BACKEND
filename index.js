@@ -9,6 +9,11 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 /* =========================================================
+   JOB STORAGE (IN MEMORY)
+========================================================= */
+const jobs = {};
+
+/* =========================================================
    MOCK CLIP GENERATOR
 ========================================================= */
 function generateMockClips(videoUrl, count = 5) {
@@ -43,18 +48,17 @@ app.get("/", (req, res) => {
 });
 
 /* =========================================================
-   PROCESS (INSTANT COMPLETE)
+   PROCESS ROUTE
 ========================================================= */
 app.post("/process", async (req, res) => {
   try {
-    console.log("REQUEST BODY:", req.body);
-
     const { video_url, settings } = req.body;
 
     if (!video_url) {
       return res.status(400).json({ error: "Missing video_url" });
     }
 
+    // 🔥 Smart clip count detection
     const clipCount =
       Number(req.body.clipCount) ||
       Number(req.body.number_of_clips) ||
@@ -66,19 +70,46 @@ app.post("/process", async (req, res) => {
 
     const jobId = crypto.randomUUID();
 
+    // Generate clips immediately
     const clips = generateMockClips(video_url, clipCount);
 
-    // 👇 return COMPLETED immediately
-    res.json({
+    // Store completed job
+    jobs[jobId] = {
       job_id: jobId,
       status: "completed",
-      clips: clips,
+      clips,
+    };
+
+    // Respond as processing (frontend expects this)
+    res.json({
+      job_id: jobId,
+      status: "processing",
     });
 
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
+});
+
+/* =========================================================
+   STATUS ROUTE (NEVER 404)
+========================================================= */
+app.get("/status/:jobId", (req, res) => {
+  const { jobId } = req.params;
+
+  const job = jobs[jobId];
+
+  // If job doesn't exist yet, pretend it's still processing
+  if (!job) {
+    return res.json({
+      job_id: jobId,
+      status: "processing",
+      clips: [],
+    });
+  }
+
+  res.json(job);
 });
 
 /* =========================================================
